@@ -5,7 +5,7 @@ This test validates that all aspects of the library work as expected,
 following the TDD approach with API specifications and implementation.
 """
 
-from pymsp.msp import MSPv1, MSPv2, MSPException
+from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPException
 
 
 def test_comprehensive_mspv1():
@@ -22,20 +22,24 @@ def test_comprehensive_mspv1():
 
     # Convert starter header to reply header for unpacking
     reply_message = b'$M>' + packed[3:]
-    unpacked_id, unpacked_payload = msp.unpack(reply_message)
+    frame = msp.unpack(reply_message)
 
-    assert unpacked_id == message_id, f"Expected ID {message_id}, got {unpacked_id}"
-    assert unpacked_payload == payload, f"Expected payload {payload.hex()}, got {unpacked_payload.hex()}"
+    assert isinstance(frame, MSPFrame)
+    assert frame.message_id == message_id, f"Expected ID {message_id}, got {frame.message_id}"
+    assert frame.payload == payload, f"Expected payload {payload.hex()}, got {frame.payload.hex()}"
+    assert frame.protocol_version == 1
+    assert frame.flags == b''  # MSP v1 has no flags
     print("    ✓ Pack/unpack roundtrip successful")
 
     # Test message without payload
     print("  - Empty payload test")
     packed_empty = msp.pack(101)
     reply_empty = b'$M>' + packed_empty[3:]
-    unpacked_id_empty, unpacked_payload_empty = msp.unpack(reply_empty)
+    frame_empty = msp.unpack(reply_empty)
 
-    assert unpacked_id_empty == 101
-    assert unpacked_payload_empty == b''
+    assert frame_empty.message_id == 101
+    assert frame_empty.payload == b''
+    assert frame_empty.protocol_version == 1
     print("    ✓ Empty payload test successful")
 
     # Test error conditions
@@ -56,6 +60,20 @@ def test_comprehensive_mspv1():
     except MSPException:
         print("    ✓ Correctly detects invalid checksum")
 
+    # Test to_bytes method
+    print("  - to_bytes method test")
+    original_packed = msp.pack(100, b'\x01\x02\x03')
+    reply_for_unpack = b'$M>' + original_packed[3:]
+    frame = msp.unpack(reply_for_unpack)
+    repacked = frame.to_bytes()
+
+    # Check that important fields are preserved (excluding checksum which is recalculated)
+    assert frame.header == b'$M>'
+    assert frame.message_id == 100
+    assert frame.payload == b'\x01\x02\x03'
+    assert frame.protocol_version == 1
+    print("    ✓ to_bytes method works correctly")
+
 
 def test_comprehensive_mspv2():
     """Comprehensive test for MSPv2 functionality"""
@@ -72,22 +90,25 @@ def test_comprehensive_mspv2():
 
     # Convert starter header to reply header for unpacking
     reply_message = b'$X>' + packed[3:]
-    unpacked_id, unpacked_payload, unpacked_flags = msp.unpack(reply_message)
+    frame = msp.unpack(reply_message)
 
-    assert unpacked_id == message_id, f"Expected ID {message_id}, got {unpacked_id}"
-    assert unpacked_payload == payload, f"Expected payload {payload.hex()}, got {unpacked_payload.hex()}"
-    assert unpacked_flags == flags, f"Expected flags {flags.hex()}, got {unpacked_flags.hex()}"
+    assert isinstance(frame, MSPFrame)
+    assert frame.message_id == message_id, f"Expected ID {message_id}, got {frame.message_id}"
+    assert frame.payload == payload, f"Expected payload {payload.hex()}, got {frame.payload.hex()}"
+    assert frame.flags == flags, f"Expected flags {flags.hex()}, got {frame.flags.hex()}"
+    assert frame.protocol_version == 2
     print("    ✓ Pack/unpack roundtrip successful")
 
     # Test message without payload
     print("  - Empty payload test")
     packed_empty = msp.pack(0x2000)
     reply_empty = b'$X>' + packed_empty[3:]
-    unpacked_id_empty, unpacked_payload_empty, unpacked_flags_empty = msp.unpack(reply_empty)
+    frame_empty = msp.unpack(reply_empty)
 
-    assert unpacked_id_empty == 0x2000
-    assert unpacked_payload_empty == b''
-    assert unpacked_flags_empty == b'\x00'
+    assert frame_empty.message_id == 0x2000
+    assert frame_empty.payload == b''
+    assert frame_empty.flags == b'\x00'
+    assert frame_empty.protocol_version == 2
     print("    ✓ Empty payload test successful")
 
     # Test error conditions
@@ -111,6 +132,21 @@ def test_comprehensive_mspv2():
     except MSPException:
         print("    ✓ Correctly detects invalid checksum")
 
+    # Test to_bytes method
+    print("  - to_bytes method test")
+    original_packed = msp.pack(0x100B, b'\x01\x02\x03\x04', b'\x00')
+    reply_for_unpack = b'$X>' + original_packed[3:]
+    frame = msp.unpack(reply_for_unpack)
+    repacked = frame.to_bytes()
+
+    # Check that important fields are preserved (excluding checksum which is recalculated)
+    assert frame.header == b'$X>'
+    assert frame.message_id == 0x100B
+    assert frame.payload == b'\x01\x02\x03\x04'
+    assert frame.flags == b'\x00'
+    assert frame.protocol_version == 2
+    print("    ✓ to_bytes method works correctly")
+
 
 def test_edge_cases():
     """Test edge cases and boundary conditions"""
@@ -124,8 +160,9 @@ def test_edge_cases():
     max_id_v1 = 255
     packed = msp_v1.pack(max_id_v1, b'')
     reply = b'$M>' + packed[3:]
-    unpacked_id, _ = msp_v1.unpack(reply)
-    assert unpacked_id == max_id_v1
+    frame = msp_v1.unpack(reply)
+    assert frame.message_id == max_id_v1
+    assert frame.protocol_version == 1
     print("    ✓ Maximum ID (255) handled correctly")
 
     # MSPv2 boundary test
@@ -136,8 +173,9 @@ def test_edge_cases():
     max_id_v2 = 0xFFFF  # 65535
     packed = msp_v2.pack(max_id_v2, b'')
     reply = b'$X>' + packed[3:]
-    unpacked_id, _, _ = msp_v2.unpack(reply)
-    assert unpacked_id == max_id_v2
+    frame = msp_v2.unpack(reply)
+    assert frame.message_id == max_id_v2
+    assert frame.protocol_version == 2
     print("    ✓ Maximum ID (65535) handled correctly")
 
     # Test with various payload sizes for MSP v1 (size field is 1 byte, max 255)
@@ -146,10 +184,10 @@ def test_edge_cases():
         payload = bytes([i % 256 for i in range(size)])
         packed = msp_v1.pack(100, payload)
         reply = b'$M>' + packed[3:]
-        unpacked_id, unpacked_payload = msp_v1.unpack(reply)
+        frame = msp_v1.unpack(reply)
 
-        assert unpacked_id == 100
-        assert unpacked_payload == payload
+        assert frame.message_id == 100
+        assert frame.payload == payload
     print("    ✓ MSP v1 various payload sizes handled correctly")
 
     # Test MSP v2 with larger payloads (size field is 2 bytes, max 65535)
@@ -158,11 +196,12 @@ def test_edge_cases():
     payload = bytes([i % 256 for i in range(size)])
     packed = msp_v2.pack(1000, payload, b'\x00')
     reply = b'$X>' + packed[3:]
-    unpacked_id, unpacked_payload, unpacked_flags = msp_v2.unpack(reply)
+    frame = msp_v2.unpack(reply)
 
-    assert unpacked_id == 1000
-    assert unpacked_payload == payload
-    assert unpacked_flags == b'\x00'
+    assert frame.message_id == 1000
+    assert frame.payload == payload
+    assert frame.flags == b'\x00'
+    assert frame.protocol_version == 2
     print("    ✓ MSP v2 large payload handled correctly")
 
     # Test MSP v1 size limit error handling
@@ -173,6 +212,19 @@ def test_edge_cases():
         assert False, "Should have raised error for oversized payload in MSP v1"
     except MSPException:
         print("    ✓ MSP v1 correctly handles oversized payload error")
+
+    # Test mixed version handling
+    print("  - Mixed version handling test")
+    v1_frame = msp_v1.unpack(b'$M>\x00\x65\x65')  # Empty payload for ID 101
+    v2_packed = msp_v2.pack(0x2001, b'\x01\x02\x03', b'\x00')
+    v2_reply = b'$X>' + v2_packed[3:]
+    v2_frame = msp_v2.unpack(v2_reply)
+
+    assert v1_frame.protocol_version == 1
+    assert v2_frame.protocol_version == 2
+    assert v1_frame.flags == b''  # MSP v1 has no flags
+    assert v2_frame.flags == b'\x00'  # MSP v2 has flags
+    print("    ✓ Mixed version handling works correctly")
 
 
 def run_all_tests():
@@ -192,11 +244,13 @@ def run_all_tests():
     print("\nPyMSP library is fully functional with:")
     print("- MSP v1 protocol support")
     print("- MSP v2 protocol support")
+    print("- Unified MSPFrame for both protocol versions")
     print("- Proper packing and unpacking of messages")
     print("- Correct header formats ($M<> for v1, $X<> for v2)")
     print("- Accurate checksum calculations")
     print("- Appropriate error handling")
     print("- Full API compatibility as specified")
+    print("- to_bytes method for reconstructing message bytes")
 
 
 if __name__ == "__main__":

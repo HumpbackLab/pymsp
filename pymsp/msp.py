@@ -7,6 +7,35 @@ Based on the MSP protocol used in INAV and Betaflight flight controllers.
 import struct
 from enum import IntEnum
 from typing import Union, Tuple, Optional
+from dataclasses import dataclass
+
+
+@dataclass
+class MSPFrame:
+    """Generic MSP frame structure containing all components of a message"""
+    header: bytes
+    size: int
+    flags: bytes  # Will be b'' for MSP v1
+    message_id: int
+    payload: bytes
+    checksum: int
+    protocol_version: int  # 1 for MSPv1, 2 for MSPv2
+
+    def to_bytes(self) -> bytes:
+        """Convert the frame back to bytes format"""
+        if self.protocol_version == 1:
+            # MSP v1 format: header + size + message_id + payload + checksum
+            msg_data = struct.pack('<B', self.size)
+            msg_data += struct.pack('<B', self.message_id)
+            msg_data += self.payload
+            return self.header + msg_data + struct.pack('<B', self.checksum)
+        else:  # MSP v2
+            # MSP v2 format: header + size + flags + message_id + payload + checksum
+            msg_data = struct.pack('<H', self.size)
+            msg_data += self.flags
+            msg_data += struct.pack('<H', self.message_id)
+            msg_data += self.payload
+            return self.header + msg_data + struct.pack('<B', self.checksum)
 
 
 class MSPException(Exception):
@@ -77,7 +106,7 @@ class MSPv1:
 
         return message
 
-    def unpack(self, raw_message: bytes) -> Tuple[int, bytes]:
+    def unpack(self, raw_message: bytes) -> MSPFrame:
         """
         Unpack MSP v1 message.
 
@@ -85,7 +114,7 @@ class MSPv1:
             raw_message: Raw MSP message to unpack
 
         Returns:
-            Tuple of (message_id, payload)
+            MSPFrame object containing all components of the message
 
         Raises:
             MSPException: If message is malformed
@@ -112,7 +141,16 @@ class MSPv1:
         if len(payload) != size:
             raise MSPException(f"Payload size mismatch: expected {size}, got {len(payload)}")
 
-        return message_id, payload
+        # Return the complete frame
+        return MSPFrame(
+            header=self.MSP_HEADER_REPLY,
+            size=size,
+            flags=b'',  # No flags in MSP v1
+            message_id=message_id,
+            payload=payload,
+            checksum=checksum,
+            protocol_version=1
+        )
 
 
 class MSPv2:
@@ -172,7 +210,7 @@ class MSPv2:
 
         return message
 
-    def unpack(self, raw_message: bytes) -> Tuple[int, bytes, bytes]:
+    def unpack(self, raw_message: bytes) -> MSPFrame:
         """
         Unpack MSP v2 message.
 
@@ -180,7 +218,7 @@ class MSPv2:
             raw_message: Raw MSP message to unpack
 
         Returns:
-            Tuple of (message_id, payload, flags)
+            MSPFrame object containing all components of the message
 
         Raises:
             MSPException: If message is malformed
@@ -216,4 +254,13 @@ class MSPv2:
         if len(payload) != size:
             raise MSPException(f"Payload size mismatch: expected {size}, got {len(payload)}")
 
-        return message_id, payload, flags
+        # Return the complete frame
+        return MSPFrame(
+            header=self.MSP_HEADER_REPLY,
+            size=size,
+            flags=flags,
+            message_id=message_id,
+            payload=payload,
+            checksum=checksum,
+            protocol_version=2
+        )

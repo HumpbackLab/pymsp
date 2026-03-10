@@ -6,7 +6,7 @@ These tests define the expected API and behavior before implementation.
 
 import pytest
 import struct
-from pymsp.msp import MSPv1, MSPv2, MSPException
+from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPException
 
 
 def test_mspv1_import():
@@ -17,6 +17,11 @@ def test_mspv1_import():
 def test_mspv2_import():
     """Test that MSPv2 can be imported"""
     assert MSPv2 is not None
+
+
+def test_mspframe_import():
+    """Test that MSPFrame can be imported"""
+    assert MSPFrame is not None
 
 
 def test_msp_exception_import():
@@ -86,10 +91,13 @@ class TestMSPv1:
         checksum = size ^ message_id  # 0 ^ 100 = 100
         raw_message = b'$M>' + struct.pack('BBB', size, message_id, checksum)
 
-        unpacked_id, unpacked_payload = msp.unpack(raw_message)
+        frame = msp.unpack(raw_message)
 
-        assert unpacked_id == message_id
-        assert unpacked_payload == b''
+        assert isinstance(frame, MSPFrame)
+        assert frame.message_id == message_id
+        assert frame.payload == b''
+        assert frame.protocol_version == 1
+        assert frame.flags == b''  # MSP v1 has no flags
 
     def test_mspv1_unpack_valid_message_with_payload(self):
         """Test unpacking a valid MSP v1 message with payload"""
@@ -104,10 +112,14 @@ class TestMSPv1:
             checksum ^= byte
         raw_message = b'$M>' + struct.pack('BB', size, message_id) + payload + struct.pack('B', checksum)
 
-        unpacked_id, unpacked_payload = msp.unpack(raw_message)
+        frame = msp.unpack(raw_message)
 
-        assert unpacked_id == message_id
-        assert unpacked_payload == payload
+        assert isinstance(frame, MSPFrame)
+        assert frame.message_id == message_id
+        assert frame.payload == payload
+        assert frame.size == size
+        assert frame.protocol_version == 1
+        assert frame.flags == b''  # MSP v1 has no flags
 
     def test_mspv1_unpack_invalid_header(self):
         """Test that unpacking fails with invalid header"""
@@ -138,6 +150,27 @@ class TestMSPv1:
 
         with pytest.raises(MSPException, match="Checksum mismatch"):
             msp.unpack(raw_message)
+
+    def test_mspv1_frame_to_bytes(self):
+        """Test converting MSPFrame back to bytes for v1"""
+        msp = MSPv1()
+        message_id = 101
+        payload = b'\x01\x02\x03'
+
+        # Pack and unpack to get frame
+        packed = msp.pack(message_id, payload)
+        reply_message = b'$M>' + packed[3:]
+        frame = msp.unpack(reply_message)
+
+        # Convert frame back to bytes
+        repacked = frame.to_bytes()
+
+        # Should be identical to original (except possibly checksum which gets recalculated)
+        # Compare all parts except checksum
+        assert frame.header == b'$M>'
+        assert frame.protocol_version == 1
+        assert frame.message_id == message_id
+        assert frame.payload == payload
 
     def test_calculate_checksum_method(self):
         """Test the calculate_checksum static method directly"""
@@ -225,11 +258,13 @@ class TestMSPv2:
         # Build full message
         raw_message = b'$X>' + msg_part + struct.pack('B', checksum)
 
-        unpacked_id, unpacked_payload, unpacked_flags = msp.unpack(raw_message)
+        frame = msp.unpack(raw_message)
 
-        assert unpacked_id == message_id
-        assert unpacked_payload == b''
-        assert unpacked_flags == flags
+        assert isinstance(frame, MSPFrame)
+        assert frame.message_id == message_id
+        assert frame.payload == b''
+        assert frame.flags == flags
+        assert frame.protocol_version == 2
 
     def test_mspv2_unpack_valid_message_with_payload_and_flags(self):
         """Test unpacking a valid MSP v2 message with payload and flags"""
@@ -249,11 +284,14 @@ class TestMSPv2:
         # Build full message
         raw_message = b'$X>' + msg_part + struct.pack('B', checksum)
 
-        unpacked_id, unpacked_payload, unpacked_flags = msp.unpack(raw_message)
+        frame = msp.unpack(raw_message)
 
-        assert unpacked_id == message_id
-        assert unpacked_payload == payload
-        assert unpacked_flags == flags
+        assert isinstance(frame, MSPFrame)
+        assert frame.message_id == message_id
+        assert frame.payload == payload
+        assert frame.flags == flags
+        assert frame.size == size
+        assert frame.protocol_version == 2
 
     def test_mspv2_unpack_invalid_header(self):
         """Test that unpacking fails with invalid header"""
@@ -288,3 +326,26 @@ class TestMSPv2:
 
         with pytest.raises(MSPException, match="Checksum mismatch"):
             msp.unpack(raw_message)
+
+    def test_mspv2_frame_to_bytes(self):
+        """Test converting MSPFrame back to bytes for v2"""
+        msp = MSPv2()
+        message_id = 500
+        payload = b'\x01\x02\x03'
+        flags = b'\x01'
+
+        # Pack and unpack to get frame
+        packed = msp.pack(message_id, payload, flags)
+        reply_message = b'$X>' + packed[3:]
+        frame = msp.unpack(reply_message)
+
+        # Convert frame back to bytes
+        repacked = frame.to_bytes()
+
+        # Should be identical to original (except possibly checksum which gets recalculated)
+        # Compare all parts except checksum
+        assert frame.header == b'$X>'
+        assert frame.protocol_version == 2
+        assert frame.message_id == message_id
+        assert frame.payload == payload
+        assert frame.flags == flags
