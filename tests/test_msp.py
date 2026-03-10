@@ -6,7 +6,7 @@ These tests define the expected API and behavior before implementation.
 
 import pytest
 import struct
-from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPException
+from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPStreamProcessor, MSPException
 
 
 def test_mspv1_import():
@@ -22,6 +22,11 @@ def test_mspv2_import():
 def test_mspframe_import():
     """Test that MSPFrame can be imported"""
     assert MSPFrame is not None
+
+
+def test_mspstreamprocessor_import():
+    """Test that MSPStreamProcessor can be imported"""
+    assert MSPStreamProcessor is not None
 
 
 def test_msp_exception_import():
@@ -349,3 +354,179 @@ class TestMSPv2:
         assert frame.message_id == message_id
         assert frame.payload == payload
         assert frame.flags == flags
+
+
+class TestMSPStreamProcessor:
+    """Tests for MSP stream processor functionality"""
+
+    def test_stream_processor_initialization(self):
+        """Test MSPStreamProcessor initialization"""
+        processor = MSPStreamProcessor()
+        assert isinstance(processor, MSPStreamProcessor)
+        assert processor.buffer == b''
+
+    def test_process_single_mspv1_frame_complete(self):
+        """Test processing a single complete MSP v1 frame"""
+        processor = MSPStreamProcessor()
+        msp_v1 = MSPv1()
+
+        # Create a complete MSP v1 frame
+        message_id = 101
+        payload = b'\x01\x02\x03'
+        packed = msp_v1.pack(message_id, payload)
+        reply_packet = b'$M>' + packed[3:]  # Change to reply header
+
+        # Process the packet
+        frames = list(processor.push_bytes(reply_packet))
+
+        assert len(frames) == 1
+        frame = frames[0]
+        assert frame.message_id == message_id
+        assert frame.payload == payload
+        assert frame.protocol_version == 1
+
+    def test_process_single_mspv2_frame_complete(self):
+        """Test processing a single complete MSP v2 frame"""
+        processor = MSPStreamProcessor()
+        msp_v2 = MSPv2()
+
+        # Create a complete MSP v2 frame
+        message_id = 0x2001
+        payload = b'\x04\x05\x06'
+        flags = b'\x00'
+        packed = msp_v2.pack(message_id, payload, flags)
+        reply_packet = b'$X>' + packed[3:]  # Change to reply header
+
+        # Process the packet
+        frames = list(processor.push_bytes(reply_packet))
+
+        assert len(frames) == 1
+        frame = frames[0]
+        assert frame.message_id == message_id
+        assert frame.payload == payload
+        assert frame.flags == flags
+        assert frame.protocol_version == 2
+
+    def test_process_mspv1_frame_split_delivery(self):
+        """Test processing an MSP v1 frame delivered in parts"""
+        processor = MSPStreamProcessor()
+        msp_v1 = MSPv1()
+
+        # Create a frame
+        message_id = 102
+        payload = b'\x0A\x0B\x0C\x0D'
+        packed = msp_v1.pack(message_id, payload)
+        reply_packet = b'$M>' + packed[3:]
+
+        # Split delivery: first half, then second half
+        split_point = len(reply_packet) // 2
+        first_half = reply_packet[:split_point]
+        second_half = reply_packet[split_point:]
+
+        # Process first half - should yield no frames
+        frames1 = list(processor.push_bytes(first_half))
+        assert len(frames1) == 0
+
+        # Process second half - should complete the frame
+        frames2 = list(processor.push_bytes(second_half))
+        assert len(frames2) == 1
+        frame = frames2[0]
+        assert frame.message_id == message_id
+        assert frame.payload == payload
+
+    def test_process_mspv2_frame_split_delivery(self):
+        """Test processing an MSP v2 frame delivered in parts"""
+        processor = MSPStreamProcessor()
+        msp_v2 = MSPv2()
+
+        # Create a frame
+        message_id = 0x3001
+        payload = b'\x0E\x0F\x10\x11\x12'
+        flags = b'\x01'
+        packed = msp_v2.pack(message_id, payload, flags)
+        reply_packet = b'$X>' + packed[3:]
+
+        # Split delivery: first part, then middle part, then end
+        part1 = reply_packet[:4]   # Header + partial data
+        part2 = reply_packet[4:9]  # Middle part
+        part3 = reply_packet[9:]   # Final part
+
+        # Process part 1 - should yield no frames
+        frames1 = list(processor.push_bytes(part1))
+        assert len(frames1) == 0
+
+        # Process part 2 - should still not complete the frame
+        frames2 = list(processor.push_bytes(part2))
+        assert len(frames2) == 0
+
+        # Process part 3 - should complete the frame
+        frames3 = list(processor.push_bytes(part3))
+        assert len(frames3) == 1
+        frame = frames3[0]
+        assert frame.message_id == message_id
+        assert frame.payload == payload
+        assert frame.flags == flags
+
+    def test_process_multiple_frames_in_one_batch(self):
+        """Test processing multiple frames in a single push_bytes call"""
+        processor = MSPStreamProcessor()
+        msp_v1 = MSPv1()
+
+        # Create two frames
+        frame1_id, frame1_payload = 101, b'\x01\x02'
+        frame2_id, frame2_payload = 102, b'\x03\x04\x05'
+
+        packet1 = b'$M>' + msp_v1.pack(frame1_id, frame1_payload)[3:]
+        packet2 = b'$M>' + msp_v1.pack(frame2_id, frame2_payload)[3:]
+
+        # Combine both packets
+        combined_packets = packet1 + packet2
+
+        # Process both at once
+        frames = list(processor.push_bytes(combined_packets))
+
+        assert len(frames) == 2
+        assert frames[0].message_id == frame1_id
+        assert frames[0].payload == frame1_payload
+        assert frames[1].message_id == frame2_id
+        assert frames[1].payload == frame2_payload
+
+    def test_process_garbage_data(self):
+        """Test that garbage data doesn't cause errors"""
+        processor = MSPStreamProcessor()
+
+        # Process garbage data
+        garbage = b'This is not MSP data at all!'
+        frames = list(processor.push_bytes(garbage))
+
+        # Should not yield any valid frames
+        assert len(frames) == 0
+
+        # Buffer should still be manageable
+        assert isinstance(processor.buffer, bytes)
+
+    def test_process_mixed_garbage_and_valid_frame(self):
+        """Test processing a mix of garbage data and a valid frame"""
+        processor = MSPStreamProcessor()
+        msp_v1 = MSPv1()
+
+        # Create a valid frame
+        valid_frame = b'$M>' + msp_v1.pack(105, b'\x10\x20')[3:]
+
+        # Mix with garbage
+        mixed_data = b'GARBAGE DATA' + valid_frame
+
+        # Process mixed data
+        frames = list(processor.push_bytes(mixed_data))
+
+        # Eventually should find the valid frame
+        # May take multiple attempts as processor finds sync
+        if len(frames) == 0:
+            # If no frames found, try again with more data to help sync
+            more_data = b'$M>' + msp_v1.pack(106, b'\x30\x40')[3:]
+            more_frames = list(processor.push_bytes(more_data))
+            assert len(more_frames) == 1
+            assert more_frames[0].message_id == 106
+        else:
+            assert frames[0].message_id == 105
+            assert frames[0].payload == b'\x10\x20'

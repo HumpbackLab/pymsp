@@ -6,7 +6,7 @@ Based on the MSP protocol used in INAV and Betaflight flight controllers.
 
 import struct
 from enum import IntEnum
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, Iterator
 from dataclasses import dataclass
 
 
@@ -36,6 +36,100 @@ class MSPFrame:
             msg_data += struct.pack('<H', self.message_id)
             msg_data += self.payload
             return self.header + msg_data + struct.pack('<B', self.checksum)
+
+
+class MSPStreamProcessor:
+    """
+    Stream processor for MSP messages that can handle partial packets
+    and return complete frames as they become available.
+    """
+
+    def __init__(self):
+        self.buffer = b""
+        self.msp_v1 = MSPv1()
+        self.msp_v2 = MSPv2()
+
+    def push_bytes(self, new_bytes: bytes) -> Iterator[Optional[MSPFrame]]:
+        """
+        Push new bytes into the stream and return an iterator for any complete frames.
+
+        Args:
+            new_bytes: Bytes to add to the stream
+
+        Yields:
+            MSPFrame for each complete frame found, or None if buffer doesn't contain complete frame
+        """
+        self.buffer += new_bytes
+
+        while True:
+            frame = self._try_extract_frame()
+            if frame is not None:
+                yield frame
+            else:
+                # No more complete frames in buffer
+                break
+
+    def _try_extract_frame(self) -> Optional[MSPFrame]:
+        """
+        Try to extract a complete frame from the current buffer.
+
+        Returns:
+            MSPFrame if a complete frame is found, None otherwise
+        """
+        # Look for MSP v1 header anywhere in the buffer (for handling garbage data)
+        v1_header_pos = self.buffer.find(b'$M>')
+        if v1_header_pos != -1:
+            # Check if we have at least the minimum required bytes from the header position
+            if len(self.buffer) - v1_header_pos >= 6:  # At least header(3) + size(1) + id(1) + checksum(1)
+                # Get the size from the correct position
+                size = self.buffer[v1_header_pos + 3]
+
+                # Calculate total frame length: header(3) + size(1) + id(1) + payload(size) + checksum(1)
+                required_length = 3 + 1 + 1 + size + 1
+
+                if len(self.buffer) - v1_header_pos >= required_length:
+                    # Extract the potential frame starting from the header
+                    potential_frame = self.buffer[v1_header_pos:v1_header_pos + required_length]
+
+                    try:
+                        # Try to parse the frame using the existing MSPv1 class
+                        frame = self.msp_v1.unpack(potential_frame)
+                        # Remove the processed frame from buffer (including everything up to and including the frame)
+                        self.buffer = self.buffer[v1_header_pos + required_length:]
+                        return frame
+                    except MSPException:
+                        # If parsing failed, remove just the header and continue
+                        self.buffer = self.buffer[v1_header_pos + 1:]
+                        return None
+
+        # Look for MSP v2 header anywhere in the buffer (for handling garbage data)
+        v2_header_pos = self.buffer.find(b'$X>')
+        if v2_header_pos != -1:
+            # Check if we have at least the minimum required bytes from the header position
+            if len(self.buffer) - v2_header_pos >= 9:  # At least header(3) + size(2) + flags(1) + id(2) + checksum(1)
+                # Extract the size from the correct position (little endian, 2 bytes)
+                size = struct.unpack('<H', self.buffer[v2_header_pos + 3:v2_header_pos + 5])[0]
+
+                # Calculate total frame length: header(3) + size(2) + flags(1) + id(2) + payload(size) + checksum(1)
+                required_length = 3 + 2 + 1 + 2 + size + 1
+
+                if len(self.buffer) - v2_header_pos >= required_length:
+                    # Extract the potential frame starting from the header
+                    potential_frame = self.buffer[v2_header_pos:v2_header_pos + required_length]
+
+                    try:
+                        # Try to parse the frame using the existing MSPv2 class
+                        frame = self.msp_v2.unpack(potential_frame)
+                        # Remove the processed frame from buffer (including everything up to and including the frame)
+                        self.buffer = self.buffer[v2_header_pos + required_length:]
+                        return frame
+                    except MSPException:
+                        # If parsing failed, remove just the header and continue
+                        self.buffer = self.buffer[v2_header_pos + 1:]
+                        return None
+
+        # No complete frame found
+        return None
 
 
 class MSPException(Exception):
