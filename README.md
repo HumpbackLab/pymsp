@@ -1,6 +1,6 @@
 # PyMSP
 
-PyMSP is a Python library for handling MSP (MultiWii Serial Protocol) messages. It supports both MSP v1 and MSP v2 protocols used in flight controllers like INAV and Betaflight. The library now features a unified MSPFrame type for handling both MSP v1 and v2 messages.
+PyMSP is a Python library for handling MSP (MultiWii Serial Protocol) messages. It supports both MSP v1 and MSP v2 protocols used in flight controllers like INAV and Betaflight. The library features a unified MSPFrame type for handling both MSP v1 and v2 messages, plus streaming MSP data processing with MSPStreamProcessor.
 
 ## Features
 
@@ -10,6 +10,9 @@ PyMSP is a Python library for handling MSP (MultiWii Serial Protocol) messages. 
 - Checksum validation
 - Comprehensive error handling
 - Unified MSPFrame class for consistent handling of both MSP versions
+- MSPStreamProcessor for handling streaming MSP data with partial frame support
+- Garbage data recovery and synchronization
+- Support for both MSP v1 and v2 protocols in streaming mode
 
 ## Implementation Details
 
@@ -31,6 +34,12 @@ PyMSP is a Python library for handling MSP (MultiWii Serial Protocol) messages. 
 - New `MSPFrame` dataclass that represents both MSP v1 and v2 messages
 - Provides uniform interface for handling different MSP versions
 - Includes all frame components: header, size, flags, message_id, payload, checksum, and protocol_version
+
+### MSPStreamProcessor
+- Handles streaming MSP data with partial frame delivery support
+- Recovers from garbage data in the stream
+- Processes both MSP v1 and v2 frames in the same stream
+- Implements the `push_bytes` method that accepts new data and yields complete frames as they become available
 
 ## Installation
 
@@ -109,13 +118,43 @@ bytes_again = frame.to_bytes()
 print(bytes_again)
 ```
 
+### Streaming MSP Data Processing
+
+The MSPStreamProcessor handles streaming MSP data, including:
+- Partial frame delivery (frames split across multiple reads)
+- Multiple frames in a single data chunk
+- Garbage data recovery
+- Both MSP v1 and v2 protocol support
+
+```python
+from pymsp.msp import MSPStreamProcessor, MSPFrame
+
+# Create a stream processor
+processor = MSPStreamProcessor()
+
+# Process incoming data in chunks
+data_chunk1 = b"GARBAGE$data"  # May include non-MSP data
+data_chunk2 = b"$M>\x04\x65\x01\x02\x03\x04\x65"  # Complete MSP v1 frame
+data_chunk3 = b"$X>\x04\x00\x01\x00\x0B\x01\x02\x03\x04\x1B"  # Complete MSP v2 frame
+
+# Process each chunk and collect frames
+all_frames = []
+for chunk in [data_chunk1, data_chunk2, data_chunk3]:
+    frames = list(processor.push_bytes(chunk))
+    all_frames.extend(frames)
+
+# Process the collected frames
+for frame in all_frames:
+    print(f"MSP {frame.protocol_version} Frame - ID: {frame.message_id}, Payload: {frame.payload.hex()}")
+```
+
 ## Development & Testing
 
 ### TDD Approach
 - Implemented following TDD principles
 - Started with API specification and test cases
 - Developed implementation to meet test requirements
-- All tests pass (25/25)
+- All tests pass (34/34 including streaming processor tests)
 - Comprehensive coverage of functionality and edge cases
 
 ### Key Features
@@ -125,10 +164,12 @@ print(bytes_again)
 - Accurate checksum calculation and verification
 - Detailed error handling with MSPException
 - Unified MSPFrame for consistent handling of both MSP versions
+- MSPStreamProcessor for streaming data handling with partial frame support
+- Garbage data recovery and synchronization capability
 
 ### Files Structure
 - `pymsp/__init__.py` - Package initialization
-- `pymsp/msp.py` - Main MSP implementation with MSPFrame
+- `pymsp/msp.py` - Main MSP implementation with MSPFrame and MSPStreamProcessor
 - `tests/test_msp.py` - Complete API specification and unit tests
 - `tests/test_comprehensive.py` - Edge case and integration tests
 - `example_usage.py` - Demonstration script with MSPFrame usage
@@ -170,6 +211,15 @@ Unified class representing both MSP v1 and v2 messages.
 #### Methods
 
 - `to_bytes()`: Converts the frame back to raw bytes format
+
+### MSPStreamProcessor Class
+
+Handles streaming MSP data with support for partial frames.
+
+#### Methods
+
+- `__init__()`: Creates a new stream processor with internal buffer
+- `push_bytes(new_bytes)`: Processes new bytes and yields complete MSPFrame objects as they become available
 
 ## Contributing
 
