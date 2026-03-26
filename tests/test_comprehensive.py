@@ -8,6 +8,18 @@ following the TDD approach with API specifications and implementation.
 from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPException
 
 
+def crc8_dvb_s2(data):
+    crc = 0
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x80:
+                crc = ((crc << 1) ^ 0xD5) & 0xFF
+            else:
+                crc = (crc << 1) & 0xFF
+    return crc
+
+
 def test_comprehensive_mspv1():
     """Comprehensive test for MSPv1 functionality"""
     print("Testing MSPv1 functionality...")
@@ -123,10 +135,10 @@ def test_comprehensive_mspv2():
     print("  - Checksum validation test")
     try:
         # Create message with bad checksum manually
-        size_bytes = b'\x00\x00'  # Size 0
-        flags_byte = b'\x00'      # Flags
-        id_bytes = b'\x0B\x10'    # ID 0x100B in little endian
-        bad_message = b'$X>' + size_bytes + flags_byte + id_bytes + b'\xFF'  # Bad checksum
+        flags_byte = b'\x00'
+        id_bytes = b'\x0B\x10'
+        size_bytes = b'\x00\x00'
+        bad_message = b'$X>' + flags_byte + id_bytes + size_bytes + b'\xFF'
         msp.unpack(bad_message)
         assert False, "Should have raised exception for bad checksum"
     except MSPException:
@@ -146,6 +158,14 @@ def test_comprehensive_mspv2():
     assert frame.flags == b'\x00'
     assert frame.protocol_version == 2
     print("    ✓ to_bytes method works correctly")
+
+    print("  - Real INAV request frame test")
+    real_request = bytes.fromhex('24583c000100000045')
+    request_frame = msp.unpack(real_request)
+    assert request_frame.header == b'$X<'
+    assert request_frame.message_id == 1
+    assert request_frame.payload == b''
+    print("    ✓ Real INAV request frame parses correctly")
 
 
 def test_edge_cases():

@@ -30,10 +30,10 @@ class MSPFrame:
             msg_data += self.payload
             return self.header + msg_data + struct.pack('<B', self.checksum)
         else:  # MSP v2
-            # MSP v2 format: header + size + flags + message_id + payload + checksum
-            msg_data = struct.pack('<H', self.size)
-            msg_data += self.flags
+            # MSP v2 format: header + flags + message_id + size + payload + checksum
+            msg_data = self.flags
             msg_data += struct.pack('<H', self.message_id)
+            msg_data += struct.pack('<H', self.size)
             msg_data += self.payload
             return self.header + msg_data + struct.pack('<B', self.checksum)
 
@@ -76,60 +76,53 @@ class MSPStreamProcessor:
         Returns:
             MSPFrame if a complete frame is found, None otherwise
         """
-        # Look for MSP v1 header anywhere in the buffer (for handling garbage data)
-        v1_header_pos = self.buffer.find(b'$M>')
-        if v1_header_pos != -1:
-            # Check if we have at least the minimum required bytes from the header position
-            if len(self.buffer) - v1_header_pos >= 6:  # At least header(3) + size(1) + id(1) + checksum(1)
-                # Get the size from the correct position
-                size = self.buffer[v1_header_pos + 3]
+        header_pos = self._find_first_header()
+        if header_pos == -1:
+            if len(self.buffer) > 2:
+                self.buffer = self.buffer[-2:]
+            return None
 
-                # Calculate total frame length: header(3) + size(1) + id(1) + payload(size) + checksum(1)
-                required_length = 3 + 1 + 1 + size + 1
+        if header_pos > 0:
+            self.buffer = self.buffer[header_pos:]
 
-                if len(self.buffer) - v1_header_pos >= required_length:
-                    # Extract the potential frame starting from the header
-                    potential_frame = self.buffer[v1_header_pos:v1_header_pos + required_length]
+        if len(self.buffer) < 6:
+            return None
 
-                    try:
-                        # Try to parse the frame using the existing MSPv1 class
-                        frame = self.msp_v1.unpack(potential_frame)
-                        # Remove the processed frame from buffer (including everything up to and including the frame)
-                        self.buffer = self.buffer[v1_header_pos + required_length:]
-                        return frame
-                    except MSPException:
-                        # If parsing failed, remove just the header and continue
-                        self.buffer = self.buffer[v1_header_pos + 1:]
-                        return None
+        if self.buffer.startswith((b'$M<', b'$M>')):
+            size = self.buffer[3]
+            required_length = 3 + 1 + 1 + size + 1
+            parser = self.msp_v1
+        elif self.buffer.startswith((b'$X<', b'$X>')):
+            if len(self.buffer) < 9:
+                return None
+            size = struct.unpack('<H', self.buffer[6:8])[0]
+            required_length = 3 + 1 + 2 + 2 + size + 1
+            parser = self.msp_v2
+        else:
+            self.buffer = self.buffer[1:]
+            return None
 
-        # Look for MSP v2 header anywhere in the buffer (for handling garbage data)
-        v2_header_pos = self.buffer.find(b'$X>')
-        if v2_header_pos != -1:
-            # Check if we have at least the minimum required bytes from the header position
-            if len(self.buffer) - v2_header_pos >= 9:  # At least header(3) + size(2) + flags(1) + id(2) + checksum(1)
-                # Extract the size from the correct position (little endian, 2 bytes)
-                size = struct.unpack('<H', self.buffer[v2_header_pos + 3:v2_header_pos + 5])[0]
+        if len(self.buffer) < required_length:
+            return None
 
-                # Calculate total frame length: header(3) + size(2) + flags(1) + id(2) + payload(size) + checksum(1)
-                required_length = 3 + 2 + 1 + 2 + size + 1
+        potential_frame = self.buffer[:required_length]
+        try:
+            frame = parser.unpack(potential_frame)
+            self.buffer = self.buffer[required_length:]
+            return frame
+        except MSPException:
+            self.buffer = self.buffer[1:]
+            return None
 
-                if len(self.buffer) - v2_header_pos >= required_length:
-                    # Extract the potential frame starting from the header
-                    potential_frame = self.buffer[v2_header_pos:v2_header_pos + required_length]
-
-                    try:
-                        # Try to parse the frame using the existing MSPv2 class
-                        frame = self.msp_v2.unpack(potential_frame)
-                        # Remove the processed frame from buffer (including everything up to and including the frame)
-                        self.buffer = self.buffer[v2_header_pos + required_length:]
-                        return frame
-                    except MSPException:
-                        # If parsing failed, remove just the header and continue
-                        self.buffer = self.buffer[v2_header_pos + 1:]
-                        return None
-
-        # No complete frame found
-        return None
+    def _find_first_header(self) -> int:
+        positions = []
+        for header in (b'$M<', b'$M>', b'$X<', b'$X>'):
+            pos = self.buffer.find(header)
+            if pos != -1:
+                positions.append(pos)
+        if not positions:
+            return -1
+        return min(positions)
 
 
 class MSPException(Exception):
@@ -217,7 +210,7 @@ class MSPv1:
             raise MSPException("Message too short to be valid MSP v1")
 
         # Check header
-        if not raw_message.startswith(self.MSP_HEADER_REPLY):
+        if not raw_message.startswith((self.MSP_HEADER_REPLY, self.MSP_HEADER_STARTER)):
             raise MSPException("Invalid MSP v1 header")
 
         # Extract message components (skip header)
@@ -237,7 +230,7 @@ class MSPv1:
 
         # Return the complete frame
         return MSPFrame(
-            header=self.MSP_HEADER_REPLY,
+            header=raw_message[:3],
             size=size,
             flags=b'',  # No flags in MSP v1
             message_id=message_id,
@@ -259,7 +252,7 @@ class MSPv2:
     @staticmethod
     def calculate_checksum(data: bytes) -> int:
         """
-        Calculate checksum for MSP v2 protocol (simple XOR of all bytes).
+        Calculate checksum for MSP v2 protocol (CRC8-DVB-S2).
 
         Args:
             data: Data to calculate checksum for
@@ -270,7 +263,12 @@ class MSPv2:
         checksum = 0
         for byte in data:
             checksum ^= byte
-        return checksum & 0xFF
+            for _ in range(8):
+                if checksum & 0x80:
+                    checksum = ((checksum << 1) ^ 0xD5) & 0xFF
+                else:
+                    checksum = (checksum << 1) & 0xFF
+        return checksum
 
     def pack(self, message_id: int, payload: bytes = b'', flags: bytes = b'\x00') -> bytes:
         """
@@ -288,13 +286,16 @@ class MSPv2:
         if not 0 <= message_id <= 0xFFFF:
             raise MSPException(f"Invalid message ID: {message_id}. Must be between 0-65535")
 
+        if len(flags) != 1:
+            raise MSPException(f"Invalid flags length: {len(flags)}. Must be exactly 1 byte.")
+
         # Create the message without header
-        # Format: size(2 bytes) + flags(1 byte) + message_id(2 bytes) + payload
+        # Format: flags(1 byte) + message_id(2 bytes) + size(2 bytes) + payload
         size = len(payload)
-        msg_data = struct.pack('<H', size)  # Size (little endian)
-        msg_data += flags                   # Flags
-        msg_data += struct.pack('<H', message_id)  # Message ID (little endian)
-        msg_data += payload                 # Payload
+        msg_data = flags
+        msg_data += struct.pack('<H', message_id)   # Message ID (little endian)
+        msg_data += struct.pack('<H', size)         # Size (little endian)
+        msg_data += payload                         # Payload
 
         # Calculate checksum
         checksum = self.calculate_checksum(msg_data)
@@ -317,12 +318,11 @@ class MSPv2:
         Raises:
             MSPException: If message is malformed
         """
-        if len(raw_message) < 8:  # Minimum length: header(3) + size(2) + flags(1) + id(2) + checksum(1)
-            raise MSPException("Message too short to be valid MSP v2")
-
-        # Check header
-        if not raw_message.startswith(self.MSP_HEADER_REPLY):
+        if not raw_message.startswith((self.MSP_HEADER_REPLY, self.MSP_HEADER_STARTER)):
             raise MSPException("Invalid MSP v2 header")
+
+        if len(raw_message) < 9:  # Minimum length: header(3) + flags(1) + id(2) + size(2) + checksum(1)
+            raise MSPException("Message too short to be valid MSP v2")
 
         # Extract message components (skip header)
         message_data = raw_message[3:]
@@ -339,18 +339,18 @@ class MSPv2:
         if checksum != expected_checksum:
             raise MSPException(f"Checksum mismatch: expected {expected_checksum:#02x}, got {checksum:#02x}")
 
-        # Now parse the message data
-        size = struct.unpack('<H', msg_part_for_checksum[:2])[0]  # Size is first 2 bytes
-        flags = msg_part_for_checksum[2:3]                        # Flags is 1 byte
-        message_id = struct.unpack('<H', msg_part_for_checksum[3:5])[0]  # Message ID is 2 bytes
-        payload = msg_part_for_checksum[5:5+size] if size > 0 else b''  # Payload follows
+        # Format: flags(1 byte) + message_id(2 bytes) + size(2 bytes) + payload
+        flags = msg_part_for_checksum[:1]
+        message_id = struct.unpack('<H', msg_part_for_checksum[1:3])[0]
+        size = struct.unpack('<H', msg_part_for_checksum[3:5])[0]
+        payload = msg_part_for_checksum[5:5 + size] if size > 0 else b''
 
         if len(payload) != size:
             raise MSPException(f"Payload size mismatch: expected {size}, got {len(payload)}")
 
         # Return the complete frame
         return MSPFrame(
-            header=self.MSP_HEADER_REPLY,
+            header=raw_message[:3],
             size=size,
             flags=flags,
             message_id=message_id,

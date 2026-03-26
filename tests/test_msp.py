@@ -9,6 +9,18 @@ import struct
 from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPStreamProcessor, MSPException
 
 
+def crc8_dvb_s2(data):
+    crc = 0
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x80:
+                crc = ((crc << 1) ^ 0xD5) & 0xFF
+            else:
+                crc = (crc << 1) & 0xFF
+    return crc
+
+
 def test_mspv1_import():
     """Test that MSPv1 can be imported"""
     assert MSPv1 is not None
@@ -202,19 +214,14 @@ class TestMSPv2:
         message_id = 400  # Example MSP V2 message ID
         packed = msp.pack(message_id)
 
-        # Expected format: $X<size_low><size_high><flags><message_id_low><message_id_high><payload><checksum>
+        # Expected format: $X<flags><message_id_low><message_id_high><size_low><size_high><payload><checksum>
         assert packed.startswith(b'$X<')
-        # Next 2 bytes should be size (0 in little endian)
-        assert packed[3:5] == struct.pack('<H', 0)
-        # Next byte should be default flags (0)
-        assert packed[5] == 0
-        # Next 2 bytes should be message ID in little endian
-        assert packed[6:8] == struct.pack('<H', message_id)
+        assert packed[3] == 0
+        assert packed[4:6] == struct.pack('<H', message_id)
+        assert packed[6:8] == struct.pack('<H', 0)
         # Checksum should be calculated correctly
-        msg_data_without_header_and_checksum = packed[3:8]  # size(2) + flags(1) + id(2)
-        expected_checksum = 0
-        for byte in msg_data_without_header_and_checksum:
-            expected_checksum ^= byte
+        msg_data_without_header_and_checksum = packed[3:8]
+        expected_checksum = crc8_dvb_s2(msg_data_without_header_and_checksum)
         assert packed[8] == expected_checksum
 
     def test_mspv2_pack_message_with_payload_and_flags(self):
@@ -225,19 +232,17 @@ class TestMSPv2:
         flags = b'\x05'
         packed = msp.pack(message_id, payload, flags)
 
-        # Expected format: $X<size><flags><message_id><payload><checksum>
+        # Expected format: $X<flags><message_id><size><payload><checksum>
         assert packed.startswith(b'$X<')
-        # Size bytes should match payload length
-        assert struct.unpack('<H', packed[3:5])[0] == len(payload)
-        # Flags should match
-        assert packed[5:6] == flags
-        # Message ID should match
-        assert struct.unpack('<H', packed[6:8])[0] == message_id
+        assert packed[3:4] == flags
+        assert struct.unpack('<H', packed[4:6])[0] == message_id
+        assert struct.unpack('<H', packed[6:8])[0] == len(payload)
         # Payload should match
         payload_start = 8
         payload_end = payload_start + len(payload)
         assert packed[payload_start:payload_end] == payload
         # Checksum should be calculated correctly
+        assert packed[payload_end] == crc8_dvb_s2(packed[3:payload_end])
 
     def test_mspv2_pack_invalid_message_id(self):
         """Test that packing fails with invalid message ID"""
@@ -254,11 +259,8 @@ class TestMSPv2:
         size = 0
 
         # Build the message part (without header and checksum)
-        msg_part = struct.pack('<H', size) + flags + struct.pack('<H', message_id)
-        # Calculate checksum
-        checksum = 0
-        for byte in msg_part:
-            checksum ^= byte
+        msg_part = flags + struct.pack('<H', message_id) + struct.pack('<H', size)
+        checksum = crc8_dvb_s2(msg_part)
 
         # Build full message
         raw_message = b'$X>' + msg_part + struct.pack('B', checksum)
@@ -280,11 +282,8 @@ class TestMSPv2:
         size = len(payload)
 
         # Build the message part (without header and checksum)
-        msg_part = struct.pack('<H', size) + flags + struct.pack('<H', message_id) + payload
-        # Calculate checksum
-        checksum = 0
-        for byte in msg_part:
-            checksum ^= byte
+        msg_part = flags + struct.pack('<H', message_id) + struct.pack('<H', size) + payload
+        checksum = crc8_dvb_s2(msg_part)
 
         # Build full message
         raw_message = b'$X>' + msg_part + struct.pack('B', checksum)
@@ -325,7 +324,7 @@ class TestMSPv2:
         size = 0
 
         # Build the message part (without header and checksum)
-        msg_part = struct.pack('<H', size) + flags + struct.pack('<H', message_id)
+        msg_part = flags + struct.pack('<H', message_id) + struct.pack('<H', size)
         # Build full message with wrong checksum
         raw_message = b'$X>' + msg_part + struct.pack('B', 0xFF)  # Wrong checksum
 
@@ -354,6 +353,20 @@ class TestMSPv2:
         assert frame.message_id == message_id
         assert frame.payload == payload
         assert frame.flags == flags
+
+    def test_mspv2_unpack_request_header(self):
+        """Test unpacking a valid MSP v2 request header"""
+        msp = MSPv2()
+        raw_message = bytes.fromhex('24583c000100000045')
+
+        frame = msp.unpack(raw_message)
+
+        assert frame.header == b'$X<'
+        assert frame.protocol_version == 2
+        assert frame.flags == b'\x00'
+        assert frame.message_id == 1
+        assert frame.size == 0
+        assert frame.payload == b''
 
 
 class TestMSPStreamProcessor:
@@ -405,6 +418,20 @@ class TestMSPStreamProcessor:
         assert frame.message_id == message_id
         assert frame.payload == payload
         assert frame.flags == flags
+        assert frame.protocol_version == 2
+
+    def test_process_single_mspv2_request_frame_complete(self):
+        """Test processing a single complete MSP v2 request frame"""
+        processor = MSPStreamProcessor()
+        request_packet = bytes.fromhex('24583c000100000045')
+
+        frames = list(processor.push_bytes(request_packet))
+
+        assert len(frames) == 1
+        frame = frames[0]
+        assert frame.header == b'$X<'
+        assert frame.message_id == 1
+        assert frame.payload == b''
         assert frame.protocol_version == 2
 
     def test_process_mspv1_frame_split_delivery(self):
