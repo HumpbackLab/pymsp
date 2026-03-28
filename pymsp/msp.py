@@ -4,10 +4,10 @@ MSP (MultiWii Serial Protocol) implementation for packing and unpacking messages
 Based on the MSP protocol used in INAV and Betaflight flight controllers.
 """
 
-import struct
-from enum import IntEnum
-from typing import Union, Tuple, Optional, Iterator
 from dataclasses import dataclass
+from enum import IntEnum
+import struct
+from typing import Iterator, Optional
 
 
 @dataclass

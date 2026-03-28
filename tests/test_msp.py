@@ -4,9 +4,11 @@ Tests for the PyMSP library following TDD principles.
 These tests define the expected API and behavior before implementation.
 """
 
-import pytest
 import struct
-from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPStreamProcessor, MSPException
+
+import pytest
+
+from pymsp.msp import MSPException, MSPFrame, MSPStreamProcessor, MSPv1, MSPv2
 
 
 def crc8_dvb_s2(data):
@@ -180,7 +182,7 @@ class TestMSPv1:
         frame = msp.unpack(reply_message)
 
         # Convert frame back to bytes
-        repacked = frame.to_bytes()
+        _ = frame.to_bytes()
 
         # Should be identical to original (except possibly checksum which gets recalculated)
         # Compare all parts except checksum
@@ -344,7 +346,7 @@ class TestMSPv2:
         frame = msp.unpack(reply_message)
 
         # Convert frame back to bytes
-        repacked = frame.to_bytes()
+        _ = frame.to_bytes()
 
         # Should be identical to original (except possibly checksum which gets recalculated)
         # Compare all parts except checksum

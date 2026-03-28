@@ -5,7 +5,7 @@ This test validates that all aspects of the library work as expected,
 following the TDD approach with API specifications and implementation.
 """
 
-from pymsp.msp import MSPv1, MSPv2, MSPFrame, MSPException
+from pymsp.msp import MSPException, MSPFrame, MSPv1, MSPv2
 
 
 def crc8_dvb_s2(data):
@@ -77,7 +77,7 @@ def test_comprehensive_mspv1():
     original_packed = msp.pack(100, b'\x01\x02\x03')
     reply_for_unpack = b'$M>' + original_packed[3:]
     frame = msp.unpack(reply_for_unpack)
-    repacked = frame.to_bytes()
+    _ = frame.to_bytes()
 
     # Check that important fields are preserved (excluding checksum which is recalculated)
     assert frame.header == b'$M>'
@@ -149,7 +149,7 @@ def test_comprehensive_mspv2():
     original_packed = msp.pack(0x100B, b'\x01\x02\x03\x04', b'\x00')
     reply_for_unpack = b'$X>' + original_packed[3:]
     frame = msp.unpack(reply_for_unpack)
-    repacked = frame.to_bytes()
+    _ = frame.to_bytes()
 
     # Check that important fields are preserved (excluding checksum which is recalculated)
     assert frame.header == b'$X>'
