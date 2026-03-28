@@ -35,7 +35,8 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/yourusername/pymsp"
+"Homepage" = "https://github.com/HumpbackLab/pymsp"
+"Repository" = "https://github.com/HumpbackLab/pymsp"
 
 [tool.setuptools]
 packages = ["pymsp"]

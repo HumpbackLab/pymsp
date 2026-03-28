@@ -10,7 +10,7 @@ setup(
     description="Python library for MSP (MultiWii Serial Protocol) handling",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/pymsp",
+    url="https://github.com/HumpbackLab/pymsp",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
