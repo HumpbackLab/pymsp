@@ -52,7 +52,7 @@ pip install pymsp
 ### Packing MSP v1 Messages
 
 ```python
-from pymsp.msp import MSPv1
+from pymsp import MSPv1
 
 msp_v1 = MSPv1()
 # Pack a message with ID 101 and payload
@@ -63,7 +63,7 @@ print(packed_message)
 ### Unpacking MSP v1 Messages with MSPFrame
 
 ```python
-from pymsp.msp import MSPv1, MSPFrame
+from pymsp import MSPv1, MSPFrame
 
 msp_v1 = MSPv1()
 # Unpack a message - now returns an MSPFrame object
@@ -78,7 +78,7 @@ print(f"Header: {frame.header}")
 ### Packing MSP v2 Messages
 
 ```python
-from pymsp.msp import MSPv2
+from pymsp import MSPv2
 
 msp_v2 = MSPv2()
 # Pack a message with ID 200 and payload
@@ -89,7 +89,7 @@ print(packed_message)
 ### Unpacking MSP v2 Messages with MSPFrame
 
 ```python
-from pymsp.msp import MSPv2, MSPFrame
+from pymsp import MSPv2, MSPFrame
 
 msp_v2 = MSPv2()
 # Unpack a message - now returns an MSPFrame object
@@ -106,7 +106,7 @@ print(f"Size: {frame.size}")
 Both MSP v1 and v2 frames can be converted back to bytes:
 
 ```python
-from pymsp.msp import MSPv1
+from pymsp import MSPv1
 
 msp_v1 = MSPv1()
 # Pack and unpack a message
@@ -127,7 +127,7 @@ The MSPStreamProcessor handles streaming MSP data, including:
 - Both MSP v1 and v2 protocol support
 
 ```python
-from pymsp.msp import MSPStreamProcessor, MSPFrame
+from pymsp import MSPStreamProcessor, MSPFrame
 
 # Create a stream processor
 processor = MSPStreamProcessor()
